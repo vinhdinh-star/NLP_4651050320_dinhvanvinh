@@ -1,0 +1,109 @@
+import os
+import time  # <--- Thêm thư viện này để đo thời gian
+import easyocr
+from PIL import Image
+from transformers import CLIPModel, CLIPProcessor, MarianMTModel, MarianTokenizer
+import torch
+
+# ===== PATH =====
+cache_path = "D:/huggingface"
+
+# ===== CLIP =====
+clip_model = CLIPModel.from_pretrained(
+    "openai/clip-vit-base-patch32", cache_dir=cache_path
+)
+
+clip_processor = CLIPProcessor.from_pretrained(
+    "openai/clip-vit-base-patch32", cache_dir=cache_path
+)
+
+# ===== OCR =====
+reader = easyocr.Reader(["en", "vi"], model_storage_directory="D:/easyocr")
+
+# ===== TRANSLATE =====
+model_name = "Helsinki-NLP/opus-mt-en-vi"
+
+tokenizer = MarianTokenizer.from_pretrained(model_name, cache_dir=cache_path)
+
+translator = MarianMTModel.from_pretrained(model_name, cache_dir=cache_path)
+
+
+# ===== FUNCTION =====
+def process_image(image_path):
+
+    # Check file
+    if not os.path.exists(image_path):
+        print("Không tìm thấy ảnh!")
+        return
+
+    # Load image
+    image = Image.open(image_path).convert("RGB")
+
+    # =====================================================================
+    # BẮT ĐẦU ĐO THỜI GIAN (Bắt đầu tính từ lúc các model AI bắt đầu chạy)
+    # =====================================================================
+    start_time = time.time()
+
+    # ===== OCR =====
+    results = reader.readtext(image_path)
+    text = " ".join([res[1] for res in results])
+
+    # ===== TRANSLATE =====
+    if text.strip() != "":
+        translate_inputs = tokenizer(
+            [text], return_tensors="pt", padding=True
+        )
+        translated = translator.generate(**translate_inputs)
+        vi_text = tokenizer.decode(translated[0], skip_special_tokens=True)
+    else:
+        vi_text = ""
+
+    # ===== CLIP =====
+    labels = ["a photo", "a document", "a meme", "a screenshot"]
+
+    clip_inputs = clip_processor(
+        text=labels, images=image, return_tensors="pt", padding=True
+    )
+
+    with torch.no_grad():
+        outputs = clip_model(**clip_inputs)
+
+    probs = outputs.logits_per_image.softmax(dim=1)
+
+    # =====================================================================
+    # KẾT THÚC ĐO THỜI GIAN & TÍNH TỐC ĐỘ
+    # =====================================================================
+    end_time = time.time()
+    processing_time = end_time - start_time
+    speed = 1 / processing_time if processing_time > 0 else 0
+
+    # ===== PRINT RESULTS =====
+    print("OCR Text:", text)
+    print("Translated:", vi_text)
+
+    print("\nCLIP Prediction:")
+    for label, p in zip(labels, probs[0]):
+        print(f"{label}: {p.item():.4f}")
+
+    # In thông số tốc độ ngay trong hàm
+    print("\n===== PERFORMANCE =====")
+    print(f"Thời gian xử lý : {processing_time:.4f} giây")
+    print(f"Tốc độ xử lý    : {speed:.2f} ảnh/giây")
+    print("=======================")
+
+    # Bổ sung thêm thông tin thời gian và tốc độ vào dictionary trả về để giao diện UI có thể dùng
+    return {
+        "ocr": text,
+        "translated": vi_text,
+        "clip_probs": probs.tolist(),
+        "processing_time": processing_time,
+        "speed": speed,
+    }
+
+
+# ===== TEST =====
+# Bạn thay bằng tên ảnh của bạn để test (Ví dụ: "Untitled.png" hoặc "temp.jpg")
+result = process_image("Untitled.png")
+
+print("\nFinal Result:")
+print(result)
